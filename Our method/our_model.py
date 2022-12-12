@@ -1,7 +1,5 @@
 '''
 Our model network
-We modify this model from baseline model
-https://github.com/YapengTian/AVE-ECCV18
 '''
 
 import torch
@@ -21,7 +19,7 @@ def init_layers(layers):
 class attention_model(nn.Module):
     '''
     Self-attention-model: we use the self attenstion model for audio
-    params:
+    :parameter
     a_emb: auido_embbding size, 256
     h_sizeL inter hidden layer size, 128
     '''
@@ -39,7 +37,7 @@ class attention_model(nn.Module):
     def forward(self, fs):
         '''
         forward fucntion: forward function for self-attention
-        params
+          :parameter
         fs: audio_feature
         a_segemenate size is [batch_size, clip_size, clip_size]
         '''
@@ -101,8 +99,8 @@ class Audio_Visual_aug_model(nn.Module):
 
         z_temp = self.l_h((F.tanh(content_v))).squeeze(2) 
         alpha_t = F.softmax(z_temp, dim=-1).view(z_temp.size(0), -1, z_temp.size(1)) 
-        c_temp = torch.bmm(alpha_t, V).view(-1, vsize)
-        video_temp = c_temp.view(video.size(0), -1, vsize)
+        c_temp = torch.bmm(alpha_t, V).view(-1, video_size)
+        video_temp = c_temp.view(video.size(0), -1, video_size)
         return video_temp
 
 
@@ -146,6 +144,7 @@ class LSTM_Audio_Visual(nn.Module):
 
 class our_model(nn.Module):
     """our module
+    :parameter
     asize: the size of audio feature, it is from vgg cnn output
     vsize: the size of video feature, ti is the output of vgg cnn output
     hsize: hiddent layer size, 256
@@ -190,7 +189,7 @@ class our_model(nn.Module):
         # gamma
         gamma_v_a = (beta_v_a > threshold).float() * beta_v_a
         sum_v_a = torch.sum(gamma_v_a, dim=-1, keepdim=True)
-        gamma_v_a = gamma_va / (sum_v_a + 1e-8)
+        gamma_v_a = gamma_v_a / (sum_v_a + 1e-8)
 
         sum_a_to_v = torch.sum(beta_a_v, dim=-1, keepdim=True)
         beta_a_v = beta_a_v / (sum_a_to_v + 1e-8)
@@ -200,9 +199,9 @@ class our_model(nn.Module):
         # pos == postive 
 
         a_pos = torch.bmm(gamma_v_a, a_b2)
-        v_out = v_fea + a_pos
+        v_out = v_f + a_pos
         v_pos = torch.bmm(gamma_a_v, v_b1)
-        a_out = a_fea + v_pos
+        a_out = a_f + v_pos
         ## affine the v_out and a_out
         v_out = self.dropout(self.relu_layer(self.v_fc(v_out)))
         a_out = self.dropout(self.relu_layer(self.a_fc(a_out)))
@@ -211,36 +210,6 @@ class our_model(nn.Module):
 
         av_f = torch.mul(v_out + a_out, 0.4)
         return av_f, v_out, a_out
-
-
-
-class Classifier(nn.Module):
-    # last layer classificy
-    # 28 classes, 1 is background, not inclused here
-    def __init__(self, hzise=256, class_num=28):
-        super(Classifier, self).__init__()
-        self.L1 = nn.Linear(hzise, 128, bias=False)
-        self.L2 = nn.Linear(128, class_num, bias=False)
-    def forward(self, feature):
-        out = F.relu(self.L1(feature))
-        out = self.L2(out)
-        return out
-
-
-class Similarity(nn.Module):
-    """ function to compute audio-visual similarity
-        Cosine Similarity
-    """
-    def __init__(self,):
-        super(Similarity, self).__init__()
-
-    def forward(self, v_f, a_f):
-        v_f = F.normalize(v_f, dim=-1)
-        a_f = F.normalize(a_f, dim=-1)
-        cos = torch.sum(torch.mul(v_f, a_f), dim=-1) # [batch, 10]
-        return cos
-
-
 
 class fully_supervised(nn.Module):
     '''
@@ -269,30 +238,57 @@ class fully_supervised(nn.Module):
 
         self.v_classifier = Classifier(hzise=256)
         self.a_classifier = Classifier(hzise=256)
-
-        self.L1 = nn.Linear(2*hzise, 64, bias=False)
-        self.L2 = nn.Linear(64, class_num, bias=False)
-
-        self.L3 = nn.Linear(256, 64)
-        self.L4 = nn.Linear(64, 2)
-        # layers = [self.L1, self.L2]
-        layers = [self.L1, self.L2, self.L3, self.L4]
-        self.init_layers(layers)
+        self.L = nn.Linear(64, class_num, bias=False)
+        self.init_layers([self.L])
 
     def init_layers(self, layers):
         for layer in layers:
             nn.init.xavier_uniform(layer.weight)
 
     def forward(self, audio, video, threshold):
+        """
+        our model forward
+        """
         batch, clip, _, _, vsize = video.shape
         function_a_a = self.function_a(audio)
+        # self attention
         video_t = self.attention(function_a_a, video) # [batch, 10, 512]
         video_t = self.function_v(video_t) # [batch, 10, 128]
+        # bi_lstm
         lstm_audio, lstm_video = self.lstm_a_v(function_a_a, video_t)
-        fusion, final_v_f, final_a_f = self.psp(lstm_audio, lstm_video, threshold=threshold) # [batch, 10, 256]
+        # threshhold
+        fusion, final_v_f, final_a_f = self.model(lstm_audio, lstm_video, threshold=threshold) # [batch, 10, 256]
         cross_att = self.av_simm(final_v_f, final_a_f)
-
+        # predition
         out = self.relu_layer(self.L1(fusion))
-        pred = self.L2(out) # [batch, 10, 29]
+        pred = self.L(out) # [batch, 10, 29]
         return fusion, pred, cross_att
+
+class Classifier(nn.Module):
+    # last layer classificy
+    # 28 classes, 1 is background, not inclused here
+    def __init__(self, hzise=256, class_num=28):
+        super(Classifier, self).__init__()
+        self.L1 = nn.Linear(hzise, 128, bias=False)
+        self.L2 = nn.Linear(128, class_num, bias=False)
+    def forward(self, feature):
+        out = F.relu(self.L1(feature))
+        out = self.L2(out)
+        return out
+
+
+class Similarity(nn.Module):
+    """ function to compute audio-visual similarity
+        Cosine Similarity
+    """
+    def __init__(self,):
+        super(Similarity, self).__init__()
+
+    def forward(self, v_f, a_f):
+        v_f = F.normalize(v_f, dim=-1)
+        a_f = F.normalize(a_f, dim=-1)
+        cos = torch.sum(torch.mul(v_f, a_f), dim=-1) # [batch, 10]
+        return cos
+
+
 
